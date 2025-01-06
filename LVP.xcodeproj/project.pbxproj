@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		451155C82D2C632000DAAFFA /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 451155C72D2C632000DAAFFA /* WebRTC */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		451155A82D2C5D5600DAAFFA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				451155C82D2C632000DAAFFA /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = LVP;
 			packageProductDependencies = (
+				451155C72D2C632000DAAFFA /* WebRTC */,
 			);
 			productName = LVP;
 			productReference = 451155972D2C5D5400DAAFFA /* LVP.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 4511558E2D2C5D5400DAAFFA;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				451155C62D2C632000DAAFFA /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 451155982D2C5D5400DAAFFA /* Products */;
 			projectDirPath = "";
@@ -558,6 +567,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		451155C62D2C632000DAAFFA /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 130.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		451155C72D2C632000DAAFFA /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 451155C62D2C632000DAAFFA /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4511558F2D2C5D5400DAAFFA /* Project object */;
 }
