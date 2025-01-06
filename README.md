@@ -1,2 +1,2 @@
 # LVP
-MVP for LillyTehc
+MVP for LillyTech
