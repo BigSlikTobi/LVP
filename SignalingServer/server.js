@@ -124,7 +124,7 @@ io.on('connection', (socket) => {
       if (!data || !data.roomId) {
         log('error', `Join attempt failed - Invalid room ID from client ${socket.id}`);
         socket.emit('error', {
-          type: 'JOIN_ERROR',
+          type: 'INVALID_ROOM_ID',
           message: 'Invalid room ID'
         });
         return;
