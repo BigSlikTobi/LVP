@@ -1,18 +1,16 @@
 import Foundation
 import AVFAudio
 import WebRTC
+import SocketIO
 
 // MARK: - 1) Configuration
 
-/// A struct for STUN-only ICE servers and constraints (audio only).
 struct LillyTechWebRTCConfiguration {
-    /// Provide a basic RTCConfiguration with one STUN server
     var rtcConfiguration: RTCConfiguration {
         let config = RTCConfiguration()
         config.iceServers = [
             RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
         ]
-        // For a basic MVP, gather once. Later you can enable continual if needed.
         config.continualGatheringPolicy = .gatherOnce
         config.bundlePolicy = .maxBundle
         config.rtcpMuxPolicy = .require
@@ -22,14 +20,13 @@ struct LillyTechWebRTCConfiguration {
         return config
     }
     
-    /// Constraints to receive audio only.
     var defaultConstraints: RTCMediaConstraints {
         return RTCMediaConstraints(
             mandatoryConstraints: [
                 "OfferToReceiveAudio": "true"
             ],
             optionalConstraints: [
-                "DtlsSrtpKeyAgreement": "true"  // Usually beneficial for security
+                "DtlsSrtpKeyAgreement": "true"
             ]
         )
     }
@@ -37,7 +34,6 @@ struct LillyTechWebRTCConfiguration {
 
 // MARK: - 2) WebRTCService Protocol & Delegate
 
-/// Delegate to observe connection state, ICE events, and errors.
 protocol LillyTechWebRTCServiceDelegate: AnyObject {
     func webRTCService(_ service: LillyTechWebRTCService, didChangeConnectionState state: RTCPeerConnectionState)
     func webRTCService(_ service: LillyTechWebRTCService, didReceiveLocalOffer sdp: RTCSessionDescription)
@@ -45,13 +41,12 @@ protocol LillyTechWebRTCServiceDelegate: AnyObject {
     func webRTCService(_ service: LillyTechWebRTCService, didEncounterError error: Error)
 }
 
-/// A minimal service protocol for connecting, disconnecting, handling remote offers/answers/candidates.
 protocol LillyTechWebRTCService: AnyObject {
     var delegate: LillyTechWebRTCServiceDelegate? { get set }
     var connectionState: RTCPeerConnectionState { get }
     
-    func connect()                // Initiates an offer
-    func disconnect()             // Closes the peer connection
+    func connect()
+    func disconnect()
     func handleRemoteOffer(_ sdp: RTCSessionDescription)
     func handleRemoteAnswer(_ sdp: RTCSessionDescription)
     func handleRemoteCandidate(_ candidate: RTCIceCandidate)
@@ -61,64 +56,69 @@ protocol LillyTechWebRTCService: AnyObject {
 
 final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
     
-    // Delegate for outside observers
     weak var delegate: LillyTechWebRTCServiceDelegate?
     
-    // Peer connection state
     var connectionState: RTCPeerConnectionState {
         return peerConnection?.connectionState ?? .new
     }
     
-    // Internal references
     private var peerConnection: RTCPeerConnection?
     private let peerConnectionFactory = RTCPeerConnectionFactory()
     private let audioSession = RTCAudioSession.sharedInstance()
     
-    // Simple init that sets up the peer connection
-    init(_ config: LillyTechWebRTCConfiguration) {
+    // Add signaling client
+    var signalingClient: LillyTechSignalingClient
+    
+    // Add property to track current peer
+    private var currentPeerId: String?
+    
+    // Add this property to track all connected peers and their connections
+    private var peerConnections: [String: RTCPeerConnection] = [:]
+    
+    init(signalingClient: LillyTechSignalingClient, _ config: LillyTechWebRTCConfiguration) {
+        self.signalingClient = signalingClient
         super.init()
+        
+        signalingClient.delegate = self  // Add this line
         
         let rtcConfig = config.rtcConfiguration
         let constraints = config.defaultConstraints
         
-        // Create the peer connection
         peerConnection = peerConnectionFactory.peerConnection(
             with: rtcConfig,
             constraints: constraints,
             delegate: self
         )
         
-        // Optionally add a local audio track if you want to capture microphone
-        // For purely “listen mode,” skip this.
         let audioSource = peerConnectionFactory.audioSource(with: nil)
         let audioTrack = peerConnectionFactory.audioTrack(with: audioSource, trackId: "audio0")
         peerConnection?.add(audioTrack, streamIds: ["stream0"])
         
-        // Configure iOS audio session in a minimal way for voice
         configureAudioSession()
     }
     
-    // MARK: - LillyTechWebRTCService
+    func handleSignalingPeer(_ peerId: String) {
+        currentPeerId = peerId
+        connect()  // Start WebRTC connection with this peer
+    }
     
     func connect() {
-        // “connect” means we’re the caller → create an SDP offer
         createOffer()
     }
     
     func disconnect() {
-        // Close the peer connection
-        peerConnection?.close()
+        // Close all peer connections
+        peerConnections.values.forEach { $0.close() }
+        peerConnections.removeAll()
         resetAudioSession()
     }
     
     func handleRemoteOffer(_ sdp: RTCSessionDescription) {
-        // 1. Set remote desc
         peerConnection?.setRemoteDescription(sdp, completionHandler: { [weak self] error in
             if let error = error {
                 self?.delegate?.webRTCService(self!, didEncounterError: error)
                 return
             }
-            // 2. Since we received an offer, create an answer
             self?.createAnswer()
         })
     }
@@ -142,7 +142,7 @@ final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
     // MARK: - Private Helpers
     
     private func createOffer() {
-        guard let pc = peerConnection else { return }
+        guard let pc = peerConnection, let targetPeerId = currentPeerId else { return }
         let offerConstraints = RTCMediaConstraints(
             mandatoryConstraints: ["OfferToReceiveAudio": "true"],
             optionalConstraints: nil
@@ -158,19 +158,21 @@ final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
                 self.delegate?.webRTCService(self, didEncounterError: NSError(domain: "LillyTech", code: -1, userInfo: [NSLocalizedDescriptionKey: "No SDP generated"]))
                 return
             }
-            // Set local description, then pass it to the delegate to send over signaling
             pc.setLocalDescription(sdp, completionHandler: { [weak self] error in
+                guard let self = self else { return }
                 if let error = error {
-                    self?.delegate?.webRTCService(self!, didEncounterError: error)
+                    self.delegate?.webRTCService(self, didEncounterError: error)
                     return
                 }
-                self?.delegate?.webRTCService(self!, didReceiveLocalOffer: sdp)
+                self.delegate?.webRTCService(self, didReceiveLocalOffer: sdp)
+                // Updated to use correct target
+                self.signalingClient.sendOffer(sdp: sdp.sdp, target: targetPeerId)
             })
         }
     }
     
     private func createAnswer() {
-        guard let pc = peerConnection else { return }
+        guard let pc = peerConnection, let targetPeerId = currentPeerId else { return }
         let answerConstraints = RTCMediaConstraints(
             mandatoryConstraints: ["OfferToReceiveAudio": "true"],
             optionalConstraints: nil
@@ -186,21 +188,20 @@ final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
                 self.delegate?.webRTCService(self, didEncounterError: NSError(domain: "LillyTech", code: -2, userInfo: [NSLocalizedDescriptionKey: "No SDP generated for answer"]))
                 return
             }
-            // Set local description
             pc.setLocalDescription(sdp, completionHandler: { [weak self] error in
+                guard let self = self else { return }
                 if let error = error {
-                    self?.delegate?.webRTCService(self!, didEncounterError: error)
+                    self.delegate?.webRTCService(self, didEncounterError: error)
                     return
                 }
-                // Typically, you’d also pass this answer back over signaling
-                // to the peer that offered
-                self?.delegate?.webRTCService(self!, didReceiveLocalOffer: sdp)
+                self.delegate?.webRTCService(self, didReceiveLocalOffer: sdp)
+                // Updated to use correct target
+                self.signalingClient.sendAnswer(sdp: sdp.sdp, target: targetPeerId)
             })
         }
     }
     
     private func configureAudioSession() {
-        // Minimal approach: capture mic & route audio to speaker
         RTCAudioSession.sharedInstance().lockForConfiguration()
         do {
             try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
@@ -212,7 +213,6 @@ final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
     }
     
     private func resetAudioSession() {
-        // Deactivate session when done
         RTCAudioSession.sharedInstance().lockForConfiguration()
         do {
             try AVAudioSession.sharedInstance().setActive(false)
@@ -220,6 +220,33 @@ final class LillyTechWebRTCServiceImpl: NSObject, LillyTechWebRTCService {
             delegate?.webRTCService(self, didEncounterError: error)
         }
         RTCAudioSession.sharedInstance().unlockForConfiguration()
+    }
+    
+    private func createPeerConnection(for peerId: String) -> RTCPeerConnection? {
+        let rtcConfig = RTCConfiguration()
+        rtcConfig.iceServers = [
+            RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
+        ]
+        
+        let constraints = RTCMediaConstraints(
+            mandatoryConstraints: ["OfferToReceiveAudio": "true"],
+            optionalConstraints: nil
+        )
+        
+        let connection = peerConnectionFactory.peerConnection(
+            with: rtcConfig,
+            constraints: constraints,
+            delegate: self
+        )
+        
+        if let connection = connection {
+            let audioSource = peerConnectionFactory.audioSource(with: nil)
+            let audioTrack = peerConnectionFactory.audioTrack(with: audioSource, trackId: "audio0")
+            connection.add(audioTrack, streamIds: ["stream0"])
+            peerConnections[peerId] = connection
+        }
+        
+        return connection
     }
 }
 
@@ -231,15 +258,19 @@ extension LillyTechWebRTCServiceImpl: RTCPeerConnectionDelegate {
     }
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        // Send out candidate to the remote peer via signaling
+        guard let targetPeerId = currentPeerId else { return }
         delegate?.webRTCService(self, didReceiveCandidate: candidate)
+        signalingClient.sendIceCandidate(
+            candidate: candidate.sdp,
+            sdpMid: candidate.sdpMid ?? "",
+            sdpMLineIndex: candidate.sdpMLineIndex,
+            target: targetPeerId
+        )
     }
-    
-    // We’ll keep these empty or minimal for an MVP:
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        // For audio-only, you might not need to do anything special here
     }
+    
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) { }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) { }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) { }
@@ -249,50 +280,274 @@ extension LillyTechWebRTCServiceImpl: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) { }
 }
 
-// MARK: - 4) Minimal WebSocket Signaling (Optional)
+// Add this extension after the RTCPeerConnectionDelegate extension
+extension LillyTechWebRTCServiceImpl: LillyTechSignalingDelegate {
+    func signalingDidConnect() {
+        print("Signaling connected")
+    }
+    
+    func signalingDidDisconnect() {
+        print("Signaling disconnected")
+    }
+    
+    func signalingDidReceiveOffer(sdp: String, sender: String) {
+        let sessionDescription = RTCSessionDescription(type: .offer, sdp: sdp)
+        let peerConnection = peerConnections[sender] ?? createPeerConnection(for: sender)
+        
+        peerConnection?.setRemoteDescription(sessionDescription) { [weak self] error in
+            if let error = error {
+                self?.delegate?.webRTCService(self!, didEncounterError: error)
+                return
+            }
+            
+            // Create answer
+            let constraints = RTCMediaConstraints(
+                mandatoryConstraints: ["OfferToReceiveAudio": "true"],
+                optionalConstraints: nil
+            )
+            
+            peerConnection?.answer(for: constraints) { (sdp, error) in
+                if let error = error {
+                    self?.delegate?.webRTCService(self!, didEncounterError: error)
+                    return
+                }
+                
+                guard let sdp = sdp else { return }
+                
+                peerConnection?.setLocalDescription(sdp) { error in
+                    if let error = error {
+                        self?.delegate?.webRTCService(self!, didEncounterError: error)
+                        return
+                    }
+                    
+                    self?.signalingClient.sendAnswer(sdp: sdp.sdp, target: sender)
+                }
+            }
+        }
+    }
+    
+    func signalingDidReceiveAnswer(sdp: String, sender: String) {
+        let sessionDescription = RTCSessionDescription(type: .answer, sdp: sdp)
+        peerConnections[sender]?.setRemoteDescription(sessionDescription) { [weak self] error in
+            if let error = error {
+                self?.delegate?.webRTCService(self!, didEncounterError: error)
+            }
+        }
+    }
+    
+    func signalingDidReceiveCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int32, sender: String) {
+        let iceCandidate = RTCIceCandidate(sdp: candidate, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
+        peerConnections[sender]?.add(iceCandidate) { [weak self] error in
+            if let error = error {
+                self?.delegate?.webRTCService(self!, didEncounterError: error)
+            }
+        }
+    }
+    
+    func signalingDidJoinRoom(peerIds: [String]) {
+        // Create peer connections for all existing peers
+        peerIds.forEach { peerId in
+            if peerConnections[peerId] == nil {
+                _ = createPeerConnection(for: peerId)
+            }
+        }
+        
+        // Clean up any old connections that are no longer needed
+        let peersToRemove = Set(peerConnections.keys).subtracting(peerIds)
+        peersToRemove.forEach { peerId in
+            peerConnections[peerId]?.close()
+            peerConnections.removeValue(forKey: peerId)
+        }
+    }
+    
+    func signalingDidReceiveError(type: String, message: String) {
+        let error = NSError(domain: "LillyTech.Signaling",
+                           code: -1,
+                           userInfo: [
+                            NSLocalizedDescriptionKey: message,
+                            "type": type
+                           ])
+        delegate?.webRTCService(self, didEncounterError: error)
+    }
+}
 
-/// A minimal example if you want in the same file (simplified).
+extension String {
+    static func generateRandomRoomId(length: Int = 4) -> String {
+        let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        return String((0..<length).map{ _ in letters.randomElement()! })
+    }
+}
+
+// MARK: - 4) WebSocket Signaling with Socket.IO
+
 protocol LillyTechSignalingDelegate: AnyObject {
     func signalingDidConnect()
     func signalingDidDisconnect()
-    func signalingDidReceiveOffer(sdp: String)
-    func signalingDidReceiveAnswer(sdp: String)
-    func signalingDidReceiveCandidate(sdpMid: String, sdpMLineIndex: Int32, candidate: String)
+    func signalingDidReceiveOffer(sdp: String, sender: String)
+    func signalingDidReceiveAnswer(sdp: String, sender: String)
+    func signalingDidReceiveCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int32, sender: String)
+    func signalingDidJoinRoom(peerIds: [String])
+    func signalingDidReceiveError(type: String, message: String)
 }
 
-final class LillyTechSignalingClient {
+final class LillyTechSignalingClient: NSObject {
     
     weak var delegate: LillyTechSignalingDelegate?
-    // Suppose you have a basic WebSocket property:
-    // var webSocket: WebSocket?
+    private var socket: SocketIOClient?
+    private var manager: SocketManager?
     
-    init() {
-        // Initialize your WebSocket or other transport
+    // Add property to track peers
+    private var connectedPeers: Set<String> = []
+    
+    // Server URL
+    private let serverURL = URL(string: "http://localhost:3000")! // Replace with your server URL
+    
+    override init() {
+        super.init()
+        configureSocket()
     }
     
-    // Connect, join a room if needed
+    private func configureSocket() {
+        manager = SocketManager(socketURL: serverURL, config: [.log(true), .compress]) // Enable logging for debugging
+        socket = manager?.defaultSocket
+        
+        // Socket event handlers
+        socket?.on(clientEvent: .connect) { [weak self] data, ack in
+            self?.delegate?.signalingDidConnect()
+        }
+        
+        socket?.on(clientEvent: .disconnect) { [weak self] data, ack in
+            self?.delegate?.signalingDidDisconnect()
+        }
+        
+        socket?.on("offer") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let sdpData = data["sdp"] as? [String: String],
+                  let sdp = sdpData["sdp"],
+                  let sender = data["sender"] as? String else { return }
+            self?.delegate?.signalingDidReceiveOffer(sdp: sdp, sender: sender)
+        }
+        
+        socket?.on("answer") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let sdpData = data["sdp"] as? [String: String],
+                  let sdp = sdpData["sdp"],
+                  let sender = data["sender"] as? String else { return }
+            self?.delegate?.signalingDidReceiveAnswer(sdp: sdp, sender: sender)
+        }
+        
+        socket?.on("ice-candidate") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let candidateData = data["candidate"] as? [String: Any],
+                  let candidate = candidateData["candidate"] as? String,
+                  let sdpMid = candidateData["sdpMid"] as? String,
+                  let sdpMLineIndex = candidateData["sdpMLineIndex"] as? Int,
+                  let sender = data["sender"] as? String else { return }
+            self?.delegate?.signalingDidReceiveCandidate(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: Int32(sdpMLineIndex), sender: sender)
+        }
+        
+        socket?.on("room-joined") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let roomId = data["roomId"] as? String,
+                  let peers = data["peers"] as? [String] else { return }
+            
+            // Update local peers list with existing peers
+            self?.connectedPeers = Set(peers)
+            self?.delegate?.signalingDidJoinRoom(peerIds: peers)
+        }
+        
+        socket?.on("peer-joined") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let peerId = data["peerId"] as? String else { return }
+            
+            self?.handleNewPeer(peerId)
+            print("Peer joined: \(peerId)")
+        }
+        
+        socket?.on("peer-left") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let peerId = data["peerId"] as? String else { return }
+            
+            // Remove peer from local list
+            self?.connectedPeers.remove(peerId)
+            print("Peer left: \(peerId)")
+        }
+        
+        socket?.on("error") { [weak self] data, ack in
+            guard let data = data.first as? [String: Any],
+                  let type = data["type"] as? String,
+                  let message = data["message"] as? String else { return }
+            self?.delegate?.signalingDidReceiveError(type: type, message: message)
+        }
+    }
+    
     func connect() {
-        // webSocket?.connect()
+        socket?.connect()
     }
     
     func disconnect() {
-        // webSocket?.disconnect()
+        socket?.disconnect()
     }
     
-    // Send Offer, Answer, Candidate
-    func sendOffer(_ sdp: String) {
-        // Build JSON or protocol message
-        // webSocket?.write(string: message)
+    func sendJoinRoom(roomId: String) {
+        let data: [String: Any] = [
+            "type": "join-room",
+            "roomId": roomId
+            // "userId": "yourUserId"  // Optional
+        ]
+        socket?.emit("join-room", data)
     }
     
-    func sendAnswer(_ sdp: String) {
-        // ...
+    func sendOffer(sdp: String, target: String) {
+        let message: [String: Any] = [
+            "type": "offer",
+            "target": target,
+            "sender": socket?.sid ?? "",
+            "sdp": [
+                "type": "offer",
+                "sdp": sdp
+            ]
+        ]
+        socket?.emit("offer", message)
     }
     
-    func sendCandidate(mid: String, index: Int32, candidate: String) {
-        // ...
+    func sendAnswer(sdp: String, target: String) {
+        let message: [String: Any] = [
+            "type": "answer",
+            "target": target,
+            "sender": socket?.sid ?? "",
+            "sdp": [
+                "type": "answer",
+                "sdp": sdp
+            ]
+        ]
+        socket?.emit("answer", message)
     }
     
-    // Handle incoming messages in didReceive(event:)
-    // Then parse them, and call delegate?.signalingDidReceiveOffer(...) etc.
+    func sendIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int32, target: String) {
+        let message: [String: Any] = [
+            "type": "ice-candidate",
+            "target": target,
+            "sender": socket?.sid ?? "",
+            "candidate": [
+                "candidate": candidate,
+                "sdpMid": sdpMid,
+                "sdpMLineIndex": sdpMLineIndex
+            ]
+        ]
+        socket?.emit("ice-candidate", message)
+    }
+    
+    // Add method to handle new peer connections
+    func handleNewPeer(_ peerId: String) {
+        connectedPeers.insert(peerId)
+        if let webRTCService = delegate as? LillyTechWebRTCServiceImpl {
+            webRTCService.handleSignalingPeer(peerId)
+        }
+    }
+    
+    // Add helper method to get connected peers
+    func getConnectedPeers() -> [String] {
+        return Array(connectedPeers)
+    }
 }
