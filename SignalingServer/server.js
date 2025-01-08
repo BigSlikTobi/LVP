@@ -40,7 +40,7 @@ const log = (event, data) => {
 // Signaling Protocol Definition (JSON Message Format)
 // --------------------------------------------------
 /*
-  Message Types:
+  Message types:
 
   join-room: Client -> Server
   {
