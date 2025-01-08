@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		451155C82D2C632000DAAFFA /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 451155C72D2C632000DAAFFA /* WebRTC */; };
+		451155D02D2EA2F600DAAFFA /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 451155CF2D2EA2F600DAAFFA /* SocketIO */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				451155C82D2C632000DAAFFA /* WebRTC in Frameworks */,
+				451155D02D2EA2F600DAAFFA /* SocketIO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			name = LVP;
 			packageProductDependencies = (
 				451155C72D2C632000DAAFFA /* WebRTC */,
+				451155CF2D2EA2F600DAAFFA /* SocketIO */,
 			);
 			productName = LVP;
 			productReference = 451155972D2C5D5400DAAFFA /* LVP.app */;
@@ -203,6 +206,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				451155C62D2C632000DAAFFA /* XCRemoteSwiftPackageReference "WebRTC" */,
+				451155CE2D2EA2F600DAAFFA /* XCRemoteSwiftPackageReference "socket" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 451155982D2C5D5400DAAFFA /* Products */;
@@ -577,6 +581,14 @@
 				minimumVersion = 130.0.0;
 			};
 		};
+		451155CE2D2EA2F600DAAFFA /* XCRemoteSwiftPackageReference "socket" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -584,6 +596,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 451155C62D2C632000DAAFFA /* XCRemoteSwiftPackageReference "WebRTC" */;
 			productName = WebRTC;
+		};
+		451155CF2D2EA2F600DAAFFA /* SocketIO */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 451155CE2D2EA2F600DAAFFA /* XCRemoteSwiftPackageReference "socket" */;
+			productName = SocketIO;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
