@@ -29,10 +29,11 @@ class RTCViewModel: ObservableObject {
     private var signalingClient: LillyTechSignalingClient?
     
     func initialize() {
-        signalingClient = LillyTechSignalingClient()
+        signalingClient = LillyTechSignalingClient.shared  // Updated here
         webRTCService = LillyTechWebRTCServiceImpl(
             signalingClient: signalingClient!,
-            LillyTechWebRTCConfiguration()
+            LillyTechWebRTCConfiguration(),
+            isHost: isHost  // Pass the isHost flag
         )
         
         webRTCService?.delegate = self
@@ -54,29 +55,27 @@ class RTCViewModel: ObservableObject {
     }
     
     func createRoom() {
-        guard let signalingClient = signalingClient,
-              let webRTCService = webRTCService else {
+        guard let signalingClient = signalingClient else {
             errorMessage = "Services not initialized"
             return
         }
         
         isHost = true
+        initialize()  // Reinitialize with isHost = true
         roomId = String.generateRandomRoomId()
         signalingClient.connect()
-        // Remove webRTCService.connect() from here
     }
 
     func joinRoom() {
-        guard let signalingClient = signalingClient,
-              let webRTCService = webRTCService else {
+        guard let signalingClient = signalingClient else {
             errorMessage = "Services not initialized"
             return
         }
         
         isHost = false
-        roomId = inputRoomId  // Add this line
+        initialize()  // Reinitialize with isHost = false
+        roomId = inputRoomId
         signalingClient.connect()
-        // Remove webRTCService.connect() from here
     }
     
     func leaveRoom() {
@@ -116,6 +115,12 @@ extension RTCViewModel: LillyTechWebRTCServiceDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.errorMessage = error.localizedDescription
             self?.connectionStatus = .failed
+        }
+    }
+    
+    func webRTCService(_ service: LillyTechWebRTCService, didJoinRoomWithPeers peerIds: [String]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.remotePeerIds = peerIds
         }
     }
 }
